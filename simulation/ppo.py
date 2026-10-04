@@ -272,8 +272,8 @@ class SDNEnvironment:
     def get_energy_consumption(self) -> float:
         """Consommation énergétique courante de la station (valeur normalisée)."""
         resp = self._make_rest_request("/getenergy")
-        if resp and 'energy' in resp:
-            return float(resp['energy'])
+        if resp and 'power_w' in resp:
+            return float(resp['power_w'])
         return 0.0
 
     # ------------------------------------------------------------------
