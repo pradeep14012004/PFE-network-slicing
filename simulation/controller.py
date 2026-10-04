@@ -38,6 +38,15 @@ SLA_LATENCY = {
 
 MAX_BW_MBPS = 750
 
+# Simple power model for simulation. Replace with measured hardware values for real experiments.
+BASE_POWER_W = 20.0
+SLICE_POWER_W = {
+    'URLLC': 10.0,
+    'URLLC_eMBB_MIX': 8.0,
+    'eMBB': 15.0,
+    'mMTC': 5.0,
+}
+
 
 # ---------------------------------------------------------------------------
 # Utility helpers
@@ -84,6 +93,9 @@ class InterfaceAPI(ControllerBase):
     new_rates         = []
     active_counts     = dict((name, 0) for name in SLICE_NAMES)
     total_intervals   = 0
+    current_power_w   = BASE_POWER_W
+    total_energy_j    = 0.0
+    last_energy_timestamp = None
     ports             = []
 
     def __init__(self, req, link, data, **config):
@@ -146,6 +158,7 @@ class InterfaceAPI(ControllerBase):
                 InterfaceAPI.previous_stats[dpid] = {}
 
             enriched = []
+            active_slices = set()
             for stat in iface_stats:
                 cls        = stat.get('class', '')
                 iface      = stat.get('interface', '')
@@ -161,6 +174,7 @@ class InterfaceAPI(ControllerBase):
                                               SLA_LATENCY.get(slice_name, 10.0))
 
                 if rate > 0:
+                    active_slices.add(slice_name)
                     InterfaceAPI.active_counts[slice_name] = (
                         InterfaceAPI.active_counts.get(slice_name, 0) + 1
                     )
@@ -180,6 +194,18 @@ class InterfaceAPI(ControllerBase):
                     'nbre_demands_bytes': nbre_demands_bytes,
                     'sla_latency':        sla_latency,
                 })
+
+            power_w = BASE_POWER_W
+            for slice_name in active_slices:
+                power_w += SLICE_POWER_W.get(slice_name, 0.0)
+
+            now = float(timestamp)
+            if InterfaceAPI.last_energy_timestamp is not None:
+                elapsed = max(0.0, now - InterfaceAPI.last_energy_timestamp)
+                InterfaceAPI.total_energy_j += power_w * elapsed
+
+            InterfaceAPI.current_power_w = power_w
+            InterfaceAPI.last_energy_timestamp = now
 
             InterfaceAPI.stats_todrl = enriched
             _log_monitoring_summary(dpid, iface_stats, timestamp)
@@ -217,12 +243,11 @@ class InterfaceAPI(ControllerBase):
     @route('interface', '/getenergy', methods=['GET'])
     def getenergy(self, req, **kwargs):
         try:
-            total = max(InterfaceAPI.total_intervals, 1)
-            active_fraction = sum(
-                float(InterfaceAPI.active_counts.get(n, 0)) / total
-                for n in SLICE_NAMES
-            ) / NUM_SLICES
-            return self._json_ok({'status': 'ok', 'energy': active_fraction})
+            return self._json_ok({
+                'status': 'ok',
+                'power_w': InterfaceAPI.current_power_w,
+                'energy_joules': InterfaceAPI.total_energy_j,
+            })
         except Exception as e:
             print("[API ERROR] getenergy: %s" % str(e))
             return self._server_error(e)
